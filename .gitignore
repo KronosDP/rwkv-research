@@ -1,0 +1,7 @@
+__pycache__/
+build/
+custom_wkv_kernel.egg-info/
+dist/
+wandb/
+datasets/
+*.pyd
