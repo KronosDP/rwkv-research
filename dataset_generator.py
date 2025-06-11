@@ -80,14 +80,12 @@ def generate_language_data(lang_name, check_func, alphabet, num_samples, min_len
             s = 'ab' * n
         elif lang_name == 'L2':
             s_len = random.randint(min_len, max_len)
-            s = "".join(random.choices(alphabet, k=s_len))
-            if is_in_L2(s):
-                pass
-            else: # Flip one char to make count even
-                if 'b' in s:
-                    s = s.replace('b', 'a', 1)
-                else: # all 'a's
-                    s = s[:-1] # remove one 'a'
+            # Generate with guaranteed even number of 'a's
+            num_a = random.randint(0, s_len // 2) * 2  # Force even
+            num_b = s_len - num_a
+            s = ['a'] * num_a + ['b'] * num_b
+            random.shuffle(s)
+            s = ''.join(s)
         elif lang_name == 'L3':
             s_len = random.randint(min_len, max_len)
             pre_len = random.randint(0, s_len - 6)
