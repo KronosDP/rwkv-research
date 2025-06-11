@@ -177,8 +177,8 @@ def _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler):
         total_train_loss += loss.item()
     return total_train_loss / len(train_loader) if len(train_loader) > 0 else 0
 
-def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss):
-    """Helper for validation, logging, and checkpointing."""
+def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter):
+    """Helper for validation, logging, and checkpointing with early stopping."""
     val_metrics = {}
     for name, loader in val_loaders.items():
         metrics = evaluate(model, loader, device, loss_fn)
@@ -193,13 +193,22 @@ def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch,
 
     current_val_loss = val_metrics.get(val_loss_key, float('inf')) if val_loss_key else float('inf')
 
+    # Early stopping logic
+    improved = False
     if current_val_loss < best_val_loss:
         best_val_loss = current_val_loss
+        patience_counter = 0  # Reset patience counter
+        improved = True
         if wandb.run:
             model_path = os.path.join(wandb.run.dir, "best_model.pt")
             torch.save(model.state_dict(), model_path)
             wandb.save("best_model.pt") # Use relative path for files in wandb.run.dir
-    return best_val_loss
+        print(f"New best validation loss: {best_val_loss:.4f}")
+    else:
+        patience_counter += 1
+        print(f"No improvement for {patience_counter} epochs")
+    
+    return best_val_loss, patience_counter, improved
 
 def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn):
     """Helper for final evaluation on test sets."""
@@ -266,10 +275,29 @@ def train_experiment(config):
         loss_fn = nn.BCEWithLogitsLoss()
         scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda')) # Updated GradScaler
 
+        # Early stopping parameters
         best_val_loss = float('inf')
+        patience_counter = 0
+        patience = config.get('patience', 5)  # Default patience of 5 epochs
+        min_epochs = config.get('min_epochs', 10)  # Minimum epochs to train before early stopping
+        
+        print(f"Early stopping enabled: patience={patience}, min_epochs={min_epochs}")
+        
         for epoch in range(config.epochs):
             avg_train_loss = _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler)
-            best_val_loss = _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss)
+            best_val_loss, patience_counter, improved = _validate_and_checkpoint(
+                model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter
+            )
+            
+            # Check for early stopping
+            if epoch >= min_epochs and patience_counter >= patience:
+                print(f"\nEarly stopping triggered after {epoch + 1} epochs (patience={patience})")
+                print(f"Best validation loss: {best_val_loss:.4f}")
+                wandb.log({"early_stopped_epoch": epoch + 1, "best_val_loss": best_val_loss})
+                break
+        else:
+            print(f"\nTraining completed all {config.epochs} epochs")
+            print(f"Best validation loss: {best_val_loss:.4f}")
         
         _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn)
         
@@ -285,7 +313,9 @@ def main():
         'ffn_hidden_multiplier': 4,
         'lora_dim_w': 32, 'lora_dim_a': 32,
         'lora_dim_v': 16, 'lora_dim_g': 32,
-        'weight_decay': 0.01
+        'weight_decay': 0.01,
+        'patience': 5,  # Early stopping patience
+        'min_epochs': 10  # Minimum epochs before early stopping can trigger
     }
 
     LANG_TRAIN_CONFIGS = []
@@ -306,24 +336,24 @@ def main():
             train_experiment(config)      
 
 
-    print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
-    for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for d_model in [20, 40, 60, 80, 100]:
-             for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
-                config = {
-                    **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
-                    'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
-                }
-                train_experiment(config)
+    # print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for d_model in [20, 40, 60, 80, 100]:
+    #          for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
+    #             config = {
+    #                 **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
+    #                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
+    #             }
+    #             train_experiment(config)
 
-    print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
-    exp1_configs = [
-        {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
-        {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
-    ]
-    for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for exp_cfg in exp1_configs:
-            train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
+    # print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
+    # exp1_configs = [
+    #     {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
+    #     {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
+    # ]
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for exp_cfg in exp1_configs:
+    #         train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
 
 if __name__ == '__main__':
     try:

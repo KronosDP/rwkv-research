@@ -159,7 +159,7 @@ def main():
         'train_100_test_200_300': {'train_len': (90, 100), 'val_len': (190, 200), 'test_len': (290, 300)}
     }
     
-    total_samples_per_lang = 1_000 # Total samples for each language dataset
+    total_samples_per_lang = 1_000_000 # Total samples for each language dataset
     
     # Create base directory for datasets
     if not os.path.exists('datasets'):
@@ -194,6 +194,11 @@ def main():
             train_data = all_data[all_data['string'].str.len().between(*len_conf['train_len'])]
             val_data = all_data[all_data['string'].str.len().between(*len_conf['val_len'])]
             test_data = all_data[all_data['string'].str.len().between(*len_conf['test_len'])]
+
+            # Shuffle the datasets
+            train_data = train_data.sample(frac=1, random_state=42).reset_index(drop=True)
+            val_data = val_data.sample(frac=1, random_state=42).reset_index(drop=True)
+            test_data = test_data.sample(frac=1, random_state=42).reset_index(drop=True)
 
             # Save to CSV
             train_data.to_csv(os.path.join(config_dir, 'train.csv'), index=False)
