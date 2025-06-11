@@ -163,7 +163,7 @@ def _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler):
         tokens = batch['tokens'].to(device)
         labels = batch['labels'].to(device)
 
-        with torch.cuda.amp.autocast(enabled=(device.type == 'cuda')):
+        with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
             logits, _ = model(tokens)
             loss = loss_fn(logits.squeeze(-1), labels)
 
@@ -198,7 +198,7 @@ def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch,
         if wandb.run:
             model_path = os.path.join(wandb.run.dir, "best_model.pt")
             torch.save(model.state_dict(), model_path)
-            wandb.save(model_path) # Upload to wandb artifacts
+            wandb.save("best_model.pt") # Use relative path for files in wandb.run.dir
     return best_val_loss
 
 def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn):
