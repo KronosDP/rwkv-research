@@ -142,20 +142,17 @@ def _setup_dataloaders(config, tokenizer):
     """Helper to create and return data loaders."""
     base_path = os.path.join("datasets", config.lang, f"train_{config.train_len}_test_{config.val_test_lens[0]}_{config.val_test_lens[1]}")
     train_dataset = RegularLanguageDataset(os.path.join(base_path, "train.csv"), tokenizer)
+    val_dataset = RegularLanguageDataset(os.path.join(base_path, "validation.csv"), tokenizer)
     train_loader = DataLoader(
         train_dataset, batch_size=config.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=0
     )
-
-    val_loaders = {}
-    val_test_lens = getattr(config, 'val_test_lens', [])
-    if val_test_lens:
-        for l_val in val_test_lens:
-            val_path = os.path.join(base_path, f"val_{l_val}.csv")
-            if os.path.exists(val_path):
-                val_dataset = RegularLanguageDataset(val_path, tokenizer)
-                val_loaders[f"val_{l_val}"] = DataLoader(
-                    val_dataset, batch_size=config.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True
-                )
+    val_loader = DataLoader(
+        val_dataset, batch_size=config.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True
+    )
+    
+    # Return validation loaders as a dictionary to match expected format
+    val_loaders = {f"val_{config.val_test_lens[0]}": val_loader}
+    
     return train_loader, val_loaders, base_path
 
 def _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler):
@@ -284,7 +281,7 @@ def train_experiment(config):
 def main():
     # Base config that applies to most experiments
     base_config = {
-        'batch_size': 32, 'epochs': 20,
+        'batch_size': 1536, 'epochs': 20,
         'ffn_hidden_multiplier': 4,
         'lora_dim_w': 32, 'lora_dim_a': 32,
         'lora_dim_v': 16, 'lora_dim_g': 32,
@@ -299,25 +296,17 @@ def main():
         ]:
             LANG_TRAIN_CONFIGS.append({'lang': lang, **train_len_config})
 
-    print("\n\n===== STARTING EXPERIMENT 1: Pre-defined Model Sizes =====")
-    exp1_configs = [
-        {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
-        {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
-    ]
-    for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for exp_cfg in exp1_configs:
-            train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
-    
-    print("\n\n===== STARTING EXPERIMENT 2: D_MODEL Sweep =====")
+    print("\n\n===== STARTING EXPERIMENT 1: D_MODEL Sweep =====")
     for lang_train_cfg in LANG_TRAIN_CONFIGS:
         for d_model in [10, 20, 30, 40, 50]:
             config = {
                 **base_config, **lang_train_cfg, 'exp_id': f"2_d_model_{d_model}",
                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': 1e-4,
             }
-            train_experiment(config)
+            train_experiment(config)      
 
-    print("\n\n===== STARTING EXPERIMENT 3: D_MODEL and LR Sweep =====")
+
+    print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
     for lang_train_cfg in LANG_TRAIN_CONFIGS:
         for d_model in [20, 40, 60, 80, 100]:
              for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
@@ -326,6 +315,15 @@ def main():
                     'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
                 }
                 train_experiment(config)
+
+    print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
+    exp1_configs = [
+        {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
+        {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
+    ]
+    for lang_train_cfg in LANG_TRAIN_CONFIGS:
+        for exp_cfg in exp1_configs:
+            train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
 
 if __name__ == '__main__':
     try:

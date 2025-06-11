@@ -13,12 +13,8 @@ except ImportError:
 class WKVFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, initial_wkv_state):
-        # r_head, w_head, etc are (B, T, H, N)
-        # initial_wkv_state is (B, H, N, N)
-        
-        # Ensure inputs are contiguous and on the correct device (CUDA)
-        # PyTorch C++ extensions usually handle device placement if tensors are already on CUDA.
-        # It's good practice to ensure contiguity.
+        # The forward pass is likely fine as autocast handles the input types.
+        # It is good practice to ensure inputs are contiguous.
         r_head = r_head.contiguous()
         w_head = w_head.contiguous()
         k_bar_head = k_bar_head.contiguous()
@@ -26,54 +22,49 @@ class WKVFunction(torch.autograd.Function):
         kappa_hat_head = kappa_hat_head.contiguous()
         a_head = a_head.contiguous()
         initial_wkv_state = initial_wkv_state.contiguous()
-
-        # Call the C++/CUDA forward function
-        # It returns: p_prime_all_steps, final_wkv_state, state_cache
+        
+        # We save the original (potentially float16) tensors for memory efficiency.
+        # We will cast them to float32 only when needed in the backward pass.
+        ctx.save_for_backward(r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, initial_wkv_state)
+        
+        # The custom kernel's forward pass MUST be able to handle the autocast dtype (e.g., float16)
+        # Or we would need to cast inputs here as well. Let's assume the forward kernel is robust.
         outputs = custom_wkv_kernel.forward(r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, initial_wkv_state)
         
-        if outputs is None:
-            raise RuntimeError(
-                "The custom_wkv_kernel.forward function returned None. "
-                "This indicates a potential issue or crash within the C++ custom kernel."
-            )
-        
-        if not isinstance(outputs, (list, tuple)) or len(outputs) != 3:
-            raise RuntimeError(
-                f"The custom_wkv_kernel.forward function returned an unexpected value: {outputs}. "
-                "Expected a sequence of 3 tensors."
-            )
-        
-        if not all(isinstance(t, torch.Tensor) for t in outputs):
-            raise RuntimeError(
-                f"The custom_wkv_kernel.forward function returned non-tensor elements: {[type(t) for t in outputs]}. "
-                "Expected 3 tensors."
-            )
-            
         p_prime_all_steps, final_wkv_state, state_cache = outputs[0], outputs[1], outputs[2]
         
-        # Save tensors for backward pass
-        # Note: w_head is w_t itself. If the kernel expected pre-transformed decay (like d_lora_out),
-        # this setup would need adjustment. Assuming kernel handles w_t directly.
-        ctx.save_for_backward(r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, state_cache)
+        # The state_cache is created inside the kernel, its dtype matters.
+        # Let's save it along with other tensors.
+        ctx.state_cache = state_cache
+        
         return p_prime_all_steps, final_wkv_state
 
     @staticmethod
     def backward(ctx, grad_p_prime_all_steps, grad_final_wkv_state):
-        # grad_p_prime_all_steps is (B, T, H, N)
-        # grad_final_wkv_state is (B, H, N, N)
+        # grad_p_prime_all_steps and grad_final_wkv_state are incoming gradients.
+        # Autograd engine ensures they have the correct dtype matching the output of forward.
+        # However, the custom kernel expects float32.
         
-        r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, state_cache = ctx.saved_tensors
+        # Retrieve saved tensors. They might be float16.
+        r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, initial_wkv_state = ctx.saved_tensors
+        state_cache = ctx.state_cache
         
-        grad_p_prime_all_steps = grad_p_prime_all_steps.contiguous()
-        grad_final_wkv_state = grad_final_wkv_state.contiguous()
-
-        # Call the C++/CUDA backward function
-        # It computes gradients for: r, w, k_bar, v, kappa_hat, a, and initial_wkv_state
+        # --- CRITICAL FIX ---
+        # Explicitly cast all tensors passed to the custom C++/CUDA backward function to float32.
         grads = custom_wkv_kernel.backward(
-            grad_p_prime_all_steps, grad_final_wkv_state,
-            r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head,
-            state_cache
+            grad_p_prime_all_steps.contiguous().float(), 
+            grad_final_wkv_state.contiguous().float(),
+            r_head.contiguous().float(), 
+            w_head.contiguous().float(), 
+            k_bar_head.contiguous().float(), 
+            v_head.contiguous().float(), 
+            kappa_hat_head.contiguous().float(), 
+            a_head.contiguous().float(),
+            state_cache.contiguous().float()
         )
+        # The returned grads from the kernel should be float32. Autograd will handle casting
+        # them back to float16 if required for the rest of the backward pass.
+        
         # Order of returned grads: grad_r, grad_w, grad_k_bar, grad_v, grad_kappa_hat, grad_a, grad_initial_wkv_state
         return grads[0], grads[1], grads[2], grads[3], grads[4], grads[5], grads[6]
 

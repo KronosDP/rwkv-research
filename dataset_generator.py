@@ -159,7 +159,7 @@ def main():
         'train_100_test_200_300': {'train_len': (90, 100), 'val_len': (190, 200), 'test_len': (290, 300)}
     }
     
-    total_samples_per_lang = 200_000 # Total samples for each language dataset
+    total_samples_per_lang = 1_000 # Total samples for each language dataset
     
     # Create base directory for datasets
     if not os.path.exists('datasets'):
