@@ -38,6 +38,9 @@ try:
     import rwkv_model
     rwkv_model.use_custom_kernel = True
     print("Successfully imported pre-compiled 'custom_wkv_kernel'. Using CUDA kernel.")
+    # Log to wandb if a run is active
+    if wandb.run:
+        wandb.log({"cuda_kernel_status": "enabled"})
 except ImportError:
     print("\n" + "="*70)
     print("WARNING: Could not import the 'custom_wkv_kernel' module.")
@@ -47,6 +50,8 @@ except ImportError:
     print("="*70 + "\n")
     import rwkv_model
     rwkv_model.use_custom_kernel = False
+    if wandb.run:
+        wandb.log({"cuda_kernel_status": "disabled"})
 
 
 # --- Data Handling ---
@@ -254,6 +259,7 @@ def train_experiment(config):
         config = run.config # Use wandb.config for sweeps
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"\n--- Starting Experiment: {run_name} on {device} ---")
+        print(f"Cuda kernel status: {'enabled' if rwkv_model.use_custom_kernel else 'disabled'}")
         print(f"Config: {config}")
 
         alphabets = {'L1': ['a', 'b'], 'L2': ['a', 'b'], 'L3': ['a', 'b', 'c'], 'L4': ['a', 'b', 'c']}
@@ -309,7 +315,7 @@ def train_experiment(config):
 def main():
     # Base config that applies to most experiments
     base_config = {
-        'batch_size': 1536, 'epochs': 20,
+        'batch_size': 6144, 'epochs': 20,
         'ffn_hidden_multiplier': 4,
         'lora_dim_w': 32, 'lora_dim_a': 32,
         'lora_dim_v': 16, 'lora_dim_g': 32,
