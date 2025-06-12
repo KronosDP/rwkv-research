@@ -342,24 +342,24 @@ def main():
             train_experiment(config)      
 
 
-    # print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
-    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
-    #     for d_model in [20, 40, 60, 80, 100]:
-    #          for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
-    #             config = {
-    #                 **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
-    #                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
-    #             }
-    #             train_experiment(config)
+    print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
+    for lang_train_cfg in LANG_TRAIN_CONFIGS:
+        for d_model in [20, 40, 60, 80, 100]:
+             for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
+                config = {
+                    **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
+                    'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
+                }
+                train_experiment(config)
 
-    # print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
-    # exp1_configs = [
-    #     {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
-    #     {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
-    # ]
-    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
-    #     for exp_cfg in exp1_configs:
-    #         train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
+    print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
+    exp1_configs = [
+        {'exp_id': '1a_0.1B_arch', 'n_layer': 12, 'd_model': 768, 'head_size': 64, 'learning_rate': 6e-4},
+        {'exp_id': '1b_0.4B_arch', 'n_layer': 24, 'd_model': 1024, 'head_size': 64, 'learning_rate': 5e-4},
+    ]
+    for lang_train_cfg in LANG_TRAIN_CONFIGS:
+        for exp_cfg in exp1_configs:
+            train_experiment({**base_config, **lang_train_cfg, **exp_cfg})
 
 if __name__ == '__main__':
     try:
