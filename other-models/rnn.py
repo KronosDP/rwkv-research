@@ -230,7 +230,7 @@ def main():
         'hidden_dim': 64,  # Adding hidden dimension for RNN
         'num_ff_layers': 4,
         'dropout': 0.1,
-        'batch_size': 1664,
+        'batch_size': 5120,
         'patience': 10,
         'min_epochs': 20
     }

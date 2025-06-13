@@ -231,7 +231,7 @@ def main():
         'embedding_dim': 256,
         'num_ff_layers': 2,
         'dropout': 0.0,
-        'batch_size': 1664,
+        'batch_size': 5120,
         'patience': 10,
         'min_epochs': 20
     }

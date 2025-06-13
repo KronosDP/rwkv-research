@@ -231,7 +231,7 @@ def main():
         'hidden_dim': 64,  # Adding hidden dimension for GRU
         'num_ff_layers': 2,
         'dropout': 0.1,
-        'batch_size': 1664,
+        'batch_size': 5120,
         'patience': 10,
         'min_epochs': 20
     }
