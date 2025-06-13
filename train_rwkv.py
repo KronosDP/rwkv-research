@@ -254,7 +254,8 @@ def train_experiment(config):
         project="regex-learning", 
         config=config,
         name=run_name,
-        group=f"{config['lang']}-train{config['train_len']}"
+        group=f"{config['lang']}-train{config['train_len']}",
+        settings=wandb.Settings(init_timeout=900)
     ) as run:
         config = run.config # Use wandb.config for sweeps
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
