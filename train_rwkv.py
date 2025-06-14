@@ -143,16 +143,19 @@ def evaluate(model, data_loader, device, loss_fn):
         'f1_score': f1
     }
 
-def _setup_dataloaders(config, tokenizer):
+def _setup_dataloaders(config, tokenizer, batch_size=None):
     """Helper to create and return data loaders."""
+    if batch_size is None:
+        batch_size = config.batch_size
+        
     base_path = os.path.join("datasets", config.lang, f"train_{config.train_len}_test_{config.val_test_lens[0]}_{config.val_test_lens[1]}")
     train_dataset = RegularLanguageDataset(os.path.join(base_path, "train.csv"), tokenizer)
     val_dataset = RegularLanguageDataset(os.path.join(base_path, "validation.csv"), tokenizer)
     train_loader = DataLoader(
-        train_dataset, batch_size=config.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=0
+        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=0
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=config.batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True
+        val_dataset, batch_size=batch_size, collate_fn=collate_fn, num_workers=0, pin_memory=True
     )
     
     # Return validation loaders as a dictionary to match expected format
@@ -215,8 +218,11 @@ def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch,
     
     return best_val_loss, patience_counter, improved
 
-def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn):
+def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn, batch_size=None):
     """Helper for final evaluation on test sets."""
+    if batch_size is None:
+        batch_size = config.batch_size
+        
     print("\n--- Running Final Test Evaluation ---")
     test_loaders = {}
     if config.val_test_lens:
@@ -225,7 +231,7 @@ def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn)
             if os.path.exists(test_path):
                 test_dataset = RegularLanguageDataset(test_path, tokenizer)
                 test_loaders[f"test_{l_test}"] = DataLoader(
-                    test_dataset, batch_size=config.batch_size, collate_fn=collate_fn, num_workers=0
+                    test_dataset, batch_size=batch_size, collate_fn=collate_fn, num_workers=0
                 )
     
     test_metrics = {}
@@ -265,7 +271,10 @@ def train_experiment(config):
 
         alphabets = {'L1': ['a', 'b'], 'L2': ['a', 'b'], 'L3': ['a', 'b', 'c'], 'L4': ['a', 'b', 'c']}
         tokenizer = CharTokenizer(alphabets[config.lang])
-        train_loader, val_loaders, base_path = _setup_dataloaders(config, tokenizer)
+          # Start with the original batch size and handle OOM by reducing it
+        current_batch_size = config.batch_size
+        min_batch_size = 64
+        batch_size_reduction = 64  # Reduce by 64 each time
         
         model_params = {
             'd_model': config.d_model, 'n_layer': config.n_layer,
@@ -274,41 +283,109 @@ def train_experiment(config):
             'lora_dim_w': config.lora_dim_w, 'lora_dim_a': config.lora_dim_a,
             'lora_dim_v': config.lora_dim_v, 'lora_dim_g': config.lora_dim_g,
         }
-        model = RWKV7_Model_Classifier(**model_params).to(device)
-        print(f"Model created with {sum(p.numel() for p in model.parameters()):,} parameters.")
-        run.watch(model, log='all', log_freq=100)
+        
+        # Retry loop for handling OOM errors
+        training_successful = False
+        while not training_successful and current_batch_size >= min_batch_size:
+            try:
+                print(f"Attempting training with batch size: {current_batch_size}")
+                
+                # Clear any existing GPU memory
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                
+                # Create data loaders with current batch size
+                train_loader, val_loaders, base_path = _setup_dataloaders(config, tokenizer, current_batch_size)
+                
+                # Create model and move to device
+                model = RWKV7_Model_Classifier(**model_params).to(device)
+                print(f"Model created with {sum(p.numel() for p in model.parameters()):,} parameters.")
+                run.watch(model, log='all', log_freq=100)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.get('weight_decay', 0.01))
-        loss_fn = nn.BCEWithLogitsLoss()
-        scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda')) # Updated GradScaler
+                optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.get('weight_decay', 0.01))
+                loss_fn = nn.BCEWithLogitsLoss()
+                scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda'))
 
-        # Early stopping parameters
-        best_val_loss = float('inf')
-        patience_counter = 0
-        patience = config.get('patience', 5)  # Default patience of 5 epochs
-        min_epochs = config.get('min_epochs', 10)  # Minimum epochs to train before early stopping
+                # Log the actual batch size being used
+                wandb.log({"actual_batch_size": current_batch_size})
+                if current_batch_size != config.batch_size:
+                    print(f"WARNING: Reduced batch size from {config.batch_size} to {current_batch_size} due to memory constraints")
+                    wandb.log({"batch_size_reduced": True, "original_batch_size": config.batch_size})
+
+                # Early stopping parameters
+                best_val_loss = float('inf')
+                patience_counter = 0
+                patience = config.get('patience', 5)
+                min_epochs = config.get('min_epochs', 10)
+                
+                print(f"Early stopping enabled: patience={patience}, min_epochs={min_epochs}")
+                
+                # Training loop
+                for epoch in range(config.epochs):
+                    avg_train_loss = _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler)
+                    best_val_loss, patience_counter, improved = _validate_and_checkpoint(
+                        model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter
+                    )
+                    
+                    # Check for early stopping
+                    if epoch >= min_epochs and patience_counter >= patience:
+                        print(f"\nEarly stopping triggered after {epoch + 1} epochs (patience={patience})")
+                        print(f"Best validation loss: {best_val_loss:.4f}")
+                        wandb.log({"early_stopped_epoch": epoch + 1, "best_val_loss": best_val_loss})
+                        break
+                else:
+                    print(f"\nTraining completed all {config.epochs} epochs")
+                    print(f"Best validation loss: {best_val_loss:.4f}")
+                
+                _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn, current_batch_size)
+                
+                # If we reach here, training was successful
+                training_successful = True
+                
+            except torch.cuda.OutOfMemoryError as e:
+                print(f"\nCUDA Out of Memory Error with batch size {current_batch_size}: {str(e)}")
+                
+                # Clean up current model and data loaders
+                if 'model' in locals():
+                    del model
+                if 'optimizer' in locals():
+                    del optimizer
+                if 'train_loader' in locals():
+                    del train_loader, val_loaders
+                  # Clear GPU memory
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+                
+                # Reduce batch size by 64
+                current_batch_size = max(current_batch_size - batch_size_reduction, min_batch_size)
+                
+                if current_batch_size < min_batch_size:
+                    print(f"ERROR: Cannot reduce batch size below {min_batch_size}. Experiment failed.")
+                    wandb.log({"experiment_failed": True, "failure_reason": "batch_size_too_small"})
+                    return
+                else:
+                    print(f"Retrying with reduced batch size: {current_batch_size} (reduced by {batch_size_reduction})")
+                    wandb.log({
+                        "oom_error": True, 
+                        "reduced_batch_size_to": current_batch_size,
+                        "batch_size_reduction": batch_size_reduction,
+                        "oom_error_message": str(e)
+                    })
         
-        print(f"Early stopping enabled: patience={patience}, min_epochs={min_epochs}")
+        if not training_successful:
+            print(f"ERROR: Training failed even with minimum batch size {min_batch_size}")
+            wandb.log({"experiment_failed": True, "failure_reason": "persistent_oom"})
+            return
         
-        for epoch in range(config.epochs):
-            avg_train_loss = _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler)
-            best_val_loss, patience_counter, improved = _validate_and_checkpoint(
-                model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter
-            )
-            
-            # Check for early stopping
-            if epoch >= min_epochs and patience_counter >= patience:
-                print(f"\nEarly stopping triggered after {epoch + 1} epochs (patience={patience})")
-                print(f"Best validation loss: {best_val_loss:.4f}")
-                wandb.log({"early_stopped_epoch": epoch + 1, "best_val_loss": best_val_loss})
-                break
-        else:
-            print(f"\nTraining completed all {config.epochs} epochs")
-            print(f"Best validation loss: {best_val_loss:.4f}")
-        
-        _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn)
-        
-        del model, optimizer, train_loader, val_loaders
+        # Clean up
+        if 'model' in locals():
+            del model
+        if 'optimizer' in locals():
+            del optimizer
+        if 'train_loader' in locals():
+            del train_loader, val_loaders
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
