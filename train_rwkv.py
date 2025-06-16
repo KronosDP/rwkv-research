@@ -185,15 +185,16 @@ def _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler):
         total_train_loss += loss.item()
     return total_train_loss / len(train_loader) if len(train_loader) > 0 else 0
 
-def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter):
+def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter, step_offset=0):
     """Helper for validation, logging, and checkpointing with early stopping."""
     val_metrics = {}
     for name, loader in val_loaders.items():
         metrics = evaluate(model, loader, device, loss_fn)
         val_metrics.update({f"{name}_{k}": v for k, v in metrics.items()})
 
+    # Use step_offset to ensure epochs start from 0 on retry
     log_data = {'epoch': epoch, 'train_loss': avg_train_loss, **val_metrics}
-    wandb.log(log_data)
+    wandb.log(log_data, step=epoch + step_offset)
 
     val_loss_key = f'val_{config.val_test_lens[0]}_loss' if config.val_test_lens else None
     val_loss_for_log = val_metrics.get(val_loss_key, 'N/A') if val_loss_key else 'N/A'
@@ -271,7 +272,7 @@ def train_experiment(config):
 
         alphabets = {'L1': ['a', 'b'], 'L2': ['a', 'b'], 'L3': ['a', 'b', 'c'], 'L4': ['a', 'b', 'c']}
         tokenizer = CharTokenizer(alphabets[config.lang])
-          # Start with the original batch size and handle OOM by reducing it
+        # Start with the original batch size and handle OOM by reducing it
         current_batch_size = config.batch_size
         min_batch_size = 64
         batch_size_reduction = 64  # Reduce by 64 each time
@@ -308,10 +309,10 @@ def train_experiment(config):
                 scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda'))
 
                 # Log the actual batch size being used
-                wandb.log({"actual_batch_size": current_batch_size})
+                wandb.log({"actual_batch_size": current_batch_size}, step=step_offset)
                 if current_batch_size != config.batch_size:
                     print(f"WARNING: Reduced batch size from {config.batch_size} to {current_batch_size} due to memory constraints")
-                    wandb.log({"batch_size_reduced": True, "original_batch_size": config.batch_size})
+                    wandb.log({"batch_size_reduced": True, "original_batch_size": config.batch_size}, step=step_offset)
 
                 # Early stopping parameters
                 best_val_loss = float('inf')
@@ -320,31 +321,33 @@ def train_experiment(config):
                 min_epochs = config.get('min_epochs', 10)
                 
                 print(f"Early stopping enabled: patience={patience}, min_epochs={min_epochs}")
-                
-                # Training loop
+                  # Training loop
                 for epoch in range(config.epochs):
                     avg_train_loss = _train_epoch(model, train_loader, optimizer, loss_fn, device, scaler)
                     best_val_loss, patience_counter, improved = _validate_and_checkpoint(
-                        model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter
+                        model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter, step_offset
                     )
                     
                     # Check for early stopping
                     if epoch >= min_epochs and patience_counter >= patience:
                         print(f"\nEarly stopping triggered after {epoch + 1} epochs (patience={patience})")
                         print(f"Best validation loss: {best_val_loss:.4f}")
-                        wandb.log({"early_stopped_epoch": epoch + 1, "best_val_loss": best_val_loss})
+                        wandb.log({"early_stopped_epoch": epoch + 1, "best_val_loss": best_val_loss}, step=epoch + step_offset)
                         break
                 else:
                     print(f"\nTraining completed all {config.epochs} epochs")
                     print(f"Best validation loss: {best_val_loss:.4f}")
                 
                 _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn, current_batch_size)
-                
-                # If we reach here, training was successful
+                  # If we reach here, training was successful
                 training_successful = True
                 
             except torch.cuda.OutOfMemoryError as e:
                 print(f"\nCUDA Out of Memory Error with batch size {current_batch_size}: {str(e)}")
+                
+                # Update step_offset to continue from where we left off
+                if 'epoch' in locals():
+                    step_offset += epoch + 1  # Add the epochs completed in this attempt
                 
                 # Clean up current model and data loaders
                 if 'model' in locals():
@@ -353,7 +356,8 @@ def train_experiment(config):
                     del optimizer
                 if 'train_loader' in locals():
                     del train_loader, val_loaders
-                  # Clear GPU memory
+                
+                # Clear GPU memory
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 gc.collect()
