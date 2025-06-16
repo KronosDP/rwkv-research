@@ -255,7 +255,7 @@ def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn,
 
 def train_experiment(config):
     """Main function to run a single training experiment."""
-    run_name = f"{config['lang']}_train{config['train_len']}_exp{config['exp_id']}"
+    run_name = f"{config['lang']}_train{config['train_len']}_exp{config['exp_id']}_RMS_SWIGLU"
     
     with wandb.init(
         project="regex-learning", 
@@ -398,7 +398,7 @@ def train_experiment(config):
 def main():
     # Base config that applies to most experiments
     base_config = {
-        'batch_size': 6144, 'epochs': 20,
+        'batch_size': 6144, 'epochs': 64,
         'ffn_hidden_multiplier': 4,
         'lora_dim_w': 32, 'lora_dim_a': 32,
         'lora_dim_v': 16, 'lora_dim_g': 32,
@@ -433,26 +433,19 @@ def main():
     #                 **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
     #                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
     #             }
-    #             train_experiment(config)    print("\n\n===== TRAINING SINGLE MODELS =====")
+    #             train_experiment(config)    print("\n\n===== STARTING EXPERIMENT: RMSNorm + SwiGLU Architecture =====")
+    for lang_train_cfg in LANG_TRAIN_CONFIGS:
+        config = {
+            **base_config, **lang_train_cfg, 
+            'exp_id': "RMS_SWIGLU_d60_lr5e4",
+            'n_layer': 4, 'd_model': 60, 'head_size': 10, 
+            'learning_rate': 0.0005,  # 5e-4 as requested
+        }
+        train_experiment(config)
     
-    for lang in ['L2', 'L4']:
-        for train_len in [100]:
-            val_test_lens = [train_len * 2, train_len * 4] if train_len == 50 else [train_len * 2, train_len * 3]
-            
-            print(f"Training single RWKV model on {lang} (train_len={train_len})...")
-            config = {
-                **base_config,
-                'lang': lang,
-                'train_len': train_len,
-                'val_test_lens': val_test_lens,
-                'exp_id': f'single_{lang}_model_train{train_len}',
-                'n_layer': 4,
-                'd_model': 60,
-                'head_size': 10,
-                'learning_rate': 0.0005,
-                'epochs': 64
-            }
-            train_experiment(config)
+
+
+
 
 if __name__ == '__main__':
     try:

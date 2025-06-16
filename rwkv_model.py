@@ -10,6 +10,25 @@ except ImportError:
     print("Failed to import custom_wkv_kernel. Falling back to PyTorch implementation.")
     use_custom_kernel = False
 
+class SwiGLU(nn.Module):
+    """
+    SwiGLU activation function as described in the user request.
+    SwiGLU(x, W, V) = Swish(xW) ⊗ (xV)
+    where Swish(z) = z * σ(z) and ⊗ is element-wise multiplication.
+    """
+    def __init__(self, d_model, hidden_dim, bias=False):
+        super().__init__()
+        self.W = nn.Linear(d_model, hidden_dim, bias=bias)  # First projection
+        self.V = nn.Linear(d_model, hidden_dim, bias=bias)  # Second projection (gate)
+        
+    def forward(self, x):
+        # First projection through Swish activation
+        swish_projection = F.silu(self.W(x))  # F.silu is the Swish/SiLU function
+        # Second projection (gate)
+        gate = self.V(x)
+        # Element-wise multiplication
+        return swish_projection * gate
+
 class WKVFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, r_head, w_head, k_bar_head, v_head, kappa_hat_head, a_head, initial_wkv_state):
@@ -328,21 +347,20 @@ class RWKV_TimeMix(nn.Module):
 
 class RWKV_ChannelMix(nn.Module):
     """
-    RWKV-7 Channel Mixing Block (Simplified Feed-Forward Network).
+    RWKV-7 Channel Mixing Block (Modified with SwiGLU).
     This block mixes information across channels (the model dimension C).
-    It's a two-layer MLP with a ReLU squared activation.
-    Corresponds to Section 4.2 and Figure 1 (ReLU^2 MLP part) in the RWKV-7 paper.
+    It's a two-layer MLP with SwiGLU activation instead of ReLU squared.
+    Modified from Section 4.2 and Figure 1 (ReLU^2 MLP part) in the RWKV-7 paper.
     """
     def __init__(self, d_model, hidden_dim_multiplier=4):
         super().__init__()
         self.d_model = d_model # C
-        self.hidden_dim = d_model * hidden_dim_multiplier # Hidden dimension of the MLP (4*C in paper)
-
-        # Token shift interpolation factor (mu_k_prime) for k_t_prime (eq.23)
+        self.hidden_dim = d_model * hidden_dim_multiplier # Hidden dimension of the MLP (4*C in paper)        # Token shift interpolation factor (mu_k_prime) for k_t_prime (eq.23)
         self.mu_k_prime = nn.Parameter(torch.rand(d_model))
 
-        # Linear projections for the MLP (eq.23, 24)
-        self.W_k_prime = nn.Linear(d_model, self.hidden_dim, bias=False) # Projects to hidden dim
+        # SwiGLU activation instead of ReLU²
+        self.swiglu = SwiGLU(d_model, self.hidden_dim, bias=False)
+        # Output projection
         self.W_v_prime = nn.Linear(self.hidden_dim, d_model, bias=False) # Projects back to model dim
 
     def forward(self, x, shift_state_prev):
@@ -358,33 +376,32 @@ class RWKV_ChannelMix(nn.Module):
 
         # Interpolated input for k_t_prime: lerp(x_t, x_{t-1}, mu_k_prime) (eq.23)
         x_k_prime_lerp = x + (x_shifted - x) * self.mu_k_prime
-        # k_t_prime = (lerped_input) @ W_k_prime (eq.23)
-        k_prime = self.W_k_prime(x_k_prime_lerp) # (B, T, hidden_dim)
-
-        # Output: o_t_prime = ReLU(k_t_prime)^2 @ W_v_prime (eq.24)
-        output = self.W_v_prime(torch.relu(k_prime)**2) # (B, T, C)
+        
+        # Apply SwiGLU activation instead of ReLU²
+        hidden = self.swiglu(x_k_prime_lerp) # (B, T, hidden_dim)
+        
+        # Output projection
+        output = self.W_v_prime(hidden) # (B, T, C)
         return output, current_shift_state
 
 
 class RWKV_Block(nn.Module):
     """
     A single RWKV-7 Block, combining a TimeMix block and a ChannelMix block.
-    Includes LayerNorms before each sub-block and residual connections.
+    Includes RMSNorms before each sub-block and residual connections (modified from LayerNorms).
     Corresponds to one layer (L_x) in Figure 1.
     """
     def __init__(self, d_model, head_size, num_heads, layer_id, ffn_hidden_multiplier,
                  lora_dim_w, lora_dim_a, lora_dim_v, lora_dim_g):
         super().__init__()
-        self.layer_id = layer_id # To inform TimeMix about special handling for layer 0
-
-        # LayerNorm before TimeMix
-        self.ln_tm_in = nn.LayerNorm(d_model)
+        self.layer_id = layer_id # To inform TimeMix about special handling for layer 0        
+        # RMSNorm before TimeMix (changed from LayerNorm)
+        self.ln_tm_in = nn.RMSNorm(d_model)
         # TimeMix block
         self.tm = RWKV_TimeMix(d_model, head_size, num_heads, layer_id,
-                               lora_dim_w, lora_dim_a, lora_dim_v, lora_dim_g)
-
-        # LayerNorm before ChannelMix
-        self.ln_cm_in = nn.LayerNorm(d_model)
+                               lora_dim_w, lora_dim_a, lora_dim_v, lora_dim_g)        
+        # RMSNorm before ChannelMix (changed from LayerNorm)
+        self.ln_cm_in = nn.RMSNorm(d_model)
         # ChannelMix block
         self.cm = RWKV_ChannelMix(d_model, ffn_hidden_multiplier)
 
@@ -434,20 +451,18 @@ class RWKV7_Model_Classifier(nn.Module):
         # This is v_{t,c} in eq.10, derived from the initial embedding.
         # It needs its own token shift and projection.
         self.mu_v_for_v_prime_c = nn.Parameter(torch.rand(d_model)) # Token shift mu for v_prime_c input
-        self.W_v_for_v_prime_c = nn.Linear(d_model, d_model, bias=False) # Projection W_v for v_prime_c
-
-        # LayerNorm after embedding, before the first block (as per Figure 1)
-        self.ln_pre_blocks = nn.LayerNorm(d_model)
+        self.W_v_for_v_prime_c = nn.Linear(d_model, d_model, bias=False) # Projection W_v for v_prime_c        
+        # RMSNorm after embedding, before the first block (changed from LayerNorm)
+        self.ln_pre_blocks = nn.RMSNorm(d_model)
 
         # Stack of RWKV_Blocks
         self.blocks = nn.ModuleList([
             RWKV_Block(d_model, head_size, self.num_heads, i, ffn_hidden_multiplier,
                        lora_dim_w, lora_dim_a, lora_dim_v, lora_dim_g)
             for i in range(n_layer)
-        ])
-
-        # Final LayerNorm before the classification head (as per Figure 1, "LayerNorm" before "Head")
-        self.ln_post_blocks = nn.LayerNorm(d_model)
+        ])        
+        # Final RMSNorm before the classification head (changed from LayerNorm)
+        self.ln_post_blocks = nn.RMSNorm(d_model)
         # Classification head (e.g., for binary classification, outputting a single logit)
         self.classification_head = nn.Linear(d_model, 1) # Example: 1 output for binary classification
 
