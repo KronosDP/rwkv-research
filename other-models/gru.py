@@ -17,6 +17,9 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from train_rwkv import (CharTokenizer, RegularLanguageDataset, collate_fn,
                         evaluate)
 
+# Constants
+BEST_MODEL_FILENAME = "best_model.pt"
+
 
 class GRUModel(nn.Module):
     """GRU model for sequence classification."""
@@ -86,7 +89,7 @@ def _train_epoch(model, train_loader, optimizer, loss_fn, device):
     return total_train_loss / len(train_loader) if len(train_loader) > 0 else 0
 
 
-def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter):
+def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter, perfect_f1_counter):
     """Helper for validation, logging, and checkpointing with early stopping."""
     val_metrics = {}
     for name, loader in val_loaders.items():
@@ -97,27 +100,36 @@ def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch,
     wandb.log(log_data)
 
     val_loss_key = f'val_{config["val_test_lens"][0]}_loss' if config["val_test_lens"] else None
+    val_f1_key = f'val_{config["val_test_lens"][0]}_f1' if config["val_test_lens"] else None
     val_loss_for_log = val_metrics.get(val_loss_key, 'N/A') if val_loss_key else 'N/A'
-    print(f"Epoch {epoch+1}/{config['epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss_for_log if isinstance(val_loss_for_log, str) else f'{val_loss_for_log:.4f}'}")
+    val_f1_for_log = val_metrics.get(val_f1_key, 'N/A') if val_f1_key else 'N/A'
+    
+    print(f"Epoch {epoch+1}/{config['epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss_for_log if isinstance(val_loss_for_log, str) else f'{val_loss_for_log:.4f}'} | Val F1: {val_f1_for_log if isinstance(val_f1_for_log, str) else f'{val_f1_for_log:.4f}'}")
 
     current_val_loss = val_metrics.get(val_loss_key, float('inf')) if val_loss_key else float('inf')
+    current_val_f1 = val_metrics.get(val_f1_key, 0.0) if val_f1_key else 0.0
 
-    # Early stopping logic
+    # Check for perfect F1 score
+    if current_val_f1 >= 1.0:
+        perfect_f1_counter += 1
+        print(f"Perfect F1 score achieved! Count: {perfect_f1_counter}/2")
+    else:
+        perfect_f1_counter = 0  # Reset counter if F1 is not perfect    # Early stopping logic
     improved = False
     if current_val_loss < best_val_loss:
         best_val_loss = current_val_loss
         patience_counter = 0  # Reset patience counter
         improved = True
         if wandb.run:
-            model_path = os.path.join(wandb.run.dir, "best_model.pt")
+            model_path = os.path.join(wandb.run.dir, BEST_MODEL_FILENAME)
             torch.save(model.state_dict(), model_path)
-            wandb.save("best_model.pt")
+            wandb.save(BEST_MODEL_FILENAME)
         print(f"New best validation loss: {best_val_loss:.4f}")
     else:
         patience_counter += 1
         print(f"No improvement for {patience_counter} epochs")
     
-    return best_val_loss, patience_counter, improved
+    return best_val_loss, patience_counter, improved, perfect_f1_counter
 
 
 def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn):
@@ -131,11 +143,10 @@ def _final_test_evaluation(model, config, base_path, tokenizer, device, loss_fn)
                 test_dataset = RegularLanguageDataset(test_path, tokenizer)
                 test_loaders[f"test_{l_test}"] = DataLoader(
                     test_dataset, batch_size=config["batch_size"], collate_fn=collate_fn, num_workers=0
-                )
-    
+                )    
     test_metrics = {}
     if wandb.run:
-        best_model_path = os.path.join(wandb.run.dir, "best_model.pt")
+        best_model_path = os.path.join(wandb.run.dir, BEST_MODEL_FILENAME)
         if os.path.exists(best_model_path):
             print("Loading best model from checkpoint for final evaluation.")
             model.load_state_dict(torch.load(best_model_path))
@@ -186,23 +197,29 @@ def train_experiment(config):
         run.watch(model, log='all', log_freq=100)
 
         optimizer = torch.optim.RMSprop(model.parameters(), lr=config['learning_rate'])
-        loss_fn = nn.BCEWithLogitsLoss()
-
-        # Early stopping parameters
+        loss_fn = nn.BCEWithLogitsLoss()        # Early stopping parameters
         best_val_loss = float('inf')
         patience_counter = 0
+        perfect_f1_counter = 0  # Counter for consecutive perfect F1 scores
         patience = config.get('patience', 10)
         min_epochs = config.get('min_epochs', 20)
         
         print(f"Early stopping enabled: patience={patience}, min_epochs={min_epochs}")
+        print("F1 score early stopping: Will stop if F1=1.0 for 2 consecutive epochs")
         
         for epoch in range(config['epochs']):
             avg_train_loss = _train_epoch(model, train_loader, optimizer, loss_fn, device)
-            best_val_loss, patience_counter, improved = _validate_and_checkpoint(
-                model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter
+            best_val_loss, patience_counter, _, perfect_f1_counter = _validate_and_checkpoint(
+                model, val_loaders, device, loss_fn, config, epoch, avg_train_loss, best_val_loss, patience_counter, perfect_f1_counter
             )
             
-            # Check for early stopping
+            # Check for perfect F1 early stopping
+            if perfect_f1_counter >= 2:
+                print(f"\nF1 score early stopping triggered after {epoch + 1} epochs (F1=1.0 for {perfect_f1_counter} consecutive epochs)")
+                wandb.log({"f1_early_stopped_epoch": epoch + 1, "perfect_f1_count": perfect_f1_counter})
+                break
+            
+            # Check for regular early stopping
             if epoch >= min_epochs and patience_counter >= patience:
                 print(f"\nEarly stopping triggered after {epoch + 1} epochs (patience={patience})")
                 print(f"Best validation loss: {best_val_loss:.4f}")
@@ -226,7 +243,7 @@ def main():
     # GRU configuration as specified
     base_config = {
         'learning_rate': 0.01,
-        'epochs': 64,
+        'epochs': 1024,
         'embedding_dim': 32,
         'hidden_dim': 64,  # Adding hidden dimension for GRU
         'num_ff_layers': 2,
