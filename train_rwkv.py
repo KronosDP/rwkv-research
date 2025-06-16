@@ -437,7 +437,7 @@ def main():
     for lang_train_cfg in LANG_TRAIN_CONFIGS:
         config = {
             **base_config, **lang_train_cfg, 
-            'exp_id': "RMS_SWIGLU_d60_lr5e4",
+            'exp_id': "RMS_RELU_d60_lr5e4",
             'n_layer': 4, 'd_model': 60, 'head_size': 10, 
             'learning_rate': 0.0005,  # 5e-4 as requested
         }

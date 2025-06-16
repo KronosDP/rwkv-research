@@ -10,24 +10,6 @@ except ImportError:
     print("Failed to import custom_wkv_kernel. Falling back to PyTorch implementation.")
     use_custom_kernel = False
 
-class SwiGLU(nn.Module):
-    """
-    SwiGLU activation function as described in the user request.
-    SwiGLU(x, W, V) = Swish(xW) ⊗ (xV)
-    where Swish(z) = z * σ(z) and ⊗ is element-wise multiplication.
-    """
-    def __init__(self, d_model, hidden_dim, bias=False):
-        super().__init__()
-        self.W = nn.Linear(d_model, hidden_dim, bias=bias)  # First projection
-        self.V = nn.Linear(d_model, hidden_dim, bias=bias)  # Second projection (gate)
-        
-    def forward(self, x):
-        # First projection through Swish activation
-        swish_projection = F.silu(self.W(x))  # F.silu is the Swish/SiLU function
-        # Second projection (gate)
-        gate = self.V(x)
-        # Element-wise multiplication
-        return swish_projection * gate
 
 class WKVFunction(torch.autograd.Function):
     @staticmethod
@@ -358,8 +340,8 @@ class RWKV_ChannelMix(nn.Module):
         self.hidden_dim = d_model * hidden_dim_multiplier # Hidden dimension of the MLP (4*C in paper)        # Token shift interpolation factor (mu_k_prime) for k_t_prime (eq.23)
         self.mu_k_prime = nn.Parameter(torch.rand(d_model))
 
-        # SwiGLU activation instead of ReLU²
-        self.swiglu = SwiGLU(d_model, self.hidden_dim, bias=False)
+        # Linear projections for the MLP (eq.23, 24)
+        self.W_k_prime = nn.Linear(d_model, self.hidden_dim, bias=False) # Projects to hidden dim
         # Output projection
         self.W_v_prime = nn.Linear(self.hidden_dim, d_model, bias=False) # Projects back to model dim
 
@@ -377,11 +359,11 @@ class RWKV_ChannelMix(nn.Module):
         # Interpolated input for k_t_prime: lerp(x_t, x_{t-1}, mu_k_prime) (eq.23)
         x_k_prime_lerp = x + (x_shifted - x) * self.mu_k_prime
         
-        # Apply SwiGLU activation instead of ReLU²
-        hidden = self.swiglu(x_k_prime_lerp) # (B, T, hidden_dim)
-        
-        # Output projection
-        output = self.W_v_prime(hidden) # (B, T, C)
+        # k_t_prime = (lerped_input) @ W_k_prime (eq.23)
+        k_prime = self.W_k_prime(x_k_prime_lerp) # (B, T, hidden_dim)
+
+        # Output: o_t_prime = ReLU(k_t_prime)^2 @ W_v_prime (eq.24)
+        output = self.W_v_prime(torch.relu(k_prime)**2) # (B, T, C)
         return output, current_shift_state
 
 
