@@ -128,14 +128,14 @@ def _validate_and_checkpoint(model, val_loaders, device, loss_fn, config, epoch,
     print(f"Epoch {epoch+1}/{config['epochs']} | Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss_for_log if isinstance(val_loss_for_log, str) else f'{val_loss_for_log:.4f}'} | Val F1: {val_f1_for_log if isinstance(val_f1_for_log, str) else f'{val_f1_for_log:.4f}'}")
 
     current_val_loss = val_metrics.get(val_loss_key, float('inf')) if val_loss_key else float('inf')
-    current_val_f1 = val_metrics.get(val_f1_key, 0.0) if val_f1_key else 0.0
-
-    # Check for perfect F1 score
-    if current_val_f1 >= 1.0:
+    current_val_f1 = val_metrics.get(val_f1_key, 0.0) if val_f1_key else 0.0    # Check for perfect F1 score (allowing for floating point precision)
+    if current_val_f1 >= 0.9999:
         perfect_f1_counter += 1
-        print(f"Perfect F1 score achieved! Count: {perfect_f1_counter}/2")
+        print(f"Perfect F1 score achieved! Count: {perfect_f1_counter}/2 (F1: {current_val_f1:.6f})")
     else:
         perfect_f1_counter = 0  # Reset counter if F1 is not perfect
+        if current_val_f1 > 0.0:
+            print(f"F1 score not perfect: {current_val_f1:.6f}, resetting counter to 0")
 
     # Early stopping logic
     improved = False
