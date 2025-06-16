@@ -272,7 +272,8 @@ def train_experiment(config):
 
         alphabets = {'L1': ['a', 'b'], 'L2': ['a', 'b'], 'L3': ['a', 'b', 'c'], 'L4': ['a', 'b', 'c']}
         tokenizer = CharTokenizer(alphabets[config.lang])
-        # Start with the original batch size and handle OOM by reducing it        current_batch_size = config.batch_size
+        # Start with the original batch size and handle OOM by reducing it
+        current_batch_size = config.batch_size
         min_batch_size = 64
         batch_size_reduction = 64  # Reduce by 64 each time
         
