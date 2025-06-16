@@ -414,38 +414,45 @@ def main():
             {'train_len': 100, 'val_test_lens': [200, 300]}
         ]:
             LANG_TRAIN_CONFIGS.append({'lang': lang, **train_len_config})
+
+    # print("\n\n===== STARTING EXPERIMENT 1: D_MODEL Sweep =====")
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for d_model in [10, 20, 30, 40, 50]:
+    #         config = {
+    #             **base_config, **lang_train_cfg, 'exp_id': f"2_d_model_{d_model}",
+    #             'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': 1e-4,
+    #         }
+    #         train_experiment(config)      
+
+
+    # print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for d_model in [80, 100]:
+    #          for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
+    #             config = {
+    #                 **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
+    #                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
+    #             }
+    #             train_experiment(config)    print("\n\n===== TRAINING SINGLE MODELS =====")
     
-    # Single RWKV model for L2
-    print("Training single RWKV model on L2...")
-    l2_config = {
-        **base_config,
-        'lang': 'L2',
-        'train_len': 50,
-        'val_test_lens': [100, 200],
-        'exp_id': 'single_L2_model',
-        'n_layer': 4,
-        'd_model': 60,
-        'head_size': 10,
-        'learning_rate': 0.0005,
-        'epochs': 64
-    }
-    train_experiment(l2_config)
-    
-    # Single RWKV model for L4
-    print("Training single RWKV model on L4...")
-    l4_config = {
-        **base_config,
-        'lang': 'L4',
-        'train_len': 50,
-        'val_test_lens': [100, 200],
-        'exp_id': 'single_L4_model',
-        'n_layer': 4,
-        'd_model': 60,
-        'head_size': 10,
-        'learning_rate': 0.0005,
-        'epochs': 64
-    }
-    train_experiment(l4_config)
+    for lang in ['L2', 'L4']:
+        for train_len in [100]:
+            val_test_lens = [train_len * 2, train_len * 4] if train_len == 50 else [train_len * 2, train_len * 3]
+            
+            print(f"Training single RWKV model on {lang} (train_len={train_len})...")
+            config = {
+                **base_config,
+                'lang': lang,
+                'train_len': train_len,
+                'val_test_lens': val_test_lens,
+                'exp_id': f'single_{lang}_model_train{train_len}',
+                'n_layer': 4,
+                'd_model': 60,
+                'head_size': 10,
+                'learning_rate': 0.0005,
+                'epochs': 64
+            }
+            train_experiment(config)
 
 if __name__ == '__main__':
     try:
