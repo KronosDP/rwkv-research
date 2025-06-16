@@ -414,19 +414,19 @@ def main():
         ]:
             LANG_TRAIN_CONFIGS.append({'lang': lang, **train_len_config})
 
-    print("\n\n===== STARTING EXPERIMENT 1: D_MODEL Sweep =====")
-    for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for d_model in [10, 20, 30, 40, 50]:
-            config = {
-                **base_config, **lang_train_cfg, 'exp_id': f"2_d_model_{d_model}",
-                'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': 1e-4,
-            }
-            train_experiment(config)      
+    # print("\n\n===== STARTING EXPERIMENT 1: D_MODEL Sweep =====")
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for d_model in [10, 20, 30, 40, 50]:
+    #         config = {
+    #             **base_config, **lang_train_cfg, 'exp_id': f"2_d_model_{d_model}",
+    #             'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': 1e-4,
+    #         }
+    #         train_experiment(config)      
 
 
     print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
     for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for d_model in [20, 40, 60, 80, 100]:
+        for d_model in [80, 100]:
              for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
                 config = {
                     **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
