@@ -425,15 +425,15 @@ def main():
     #         train_experiment(config)      
 
 
-    print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
-    for lang_train_cfg in LANG_TRAIN_CONFIGS:
-        for d_model in [80, 100]:
-             for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
-                config = {
-                    **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
-                    'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
-                }
-                train_experiment(config)
+    # print("\n\n===== STARTING EXPERIMENT 2: D_MODEL and LR Sweep =====")
+    # for lang_train_cfg in LANG_TRAIN_CONFIGS:
+    #     for d_model in [80, 100]:
+    #          for lr in [1e-4, 2e-4, 3e-4, 4e-4, 5e-4]:
+    #             config = {
+    #                 **base_config, **lang_train_cfg, 'exp_id': f"3_d_model_{d_model}_lr_{lr:.0e}",
+    #                 'n_layer': 4, 'd_model': d_model, 'head_size': 10, 'learning_rate': lr,
+    #             }
+    #             train_experiment(config)
 
     print("\n\n===== STARTING EXPERIMENT 3: Pre-defined Model Sizes =====")
     exp1_configs = [
